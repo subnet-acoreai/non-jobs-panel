@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export const BRAND_NAME = 'CryptoRecruit'
+export const BRAND_NAME = 'CryptoJobs'
 export const BRAND_LOGO = '/logo.png'
 
 export function Logo({ className = 'h-10 w-auto', alt = BRAND_NAME }) {
@@ -19,7 +19,7 @@ export function Logo({ className = 'h-10 w-auto', alt = BRAND_NAME }) {
 export function BrandWordmark({ className = '', accentClassName = 'text-brand' }) {
   return (
     <span className={`whitespace-nowrap ${className}`}>
-      Crypto<span className={accentClassName}>Recruit</span>
+      Crypto<span className={accentClassName}>Jobs</span>
     </span>
   )
 }

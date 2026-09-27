@@ -311,5 +311,6 @@ app.listen(PORT, () => {
   )
   if (cjlCookie()) console.log('[cjl] Cloudflare cookie loaded')
   else console.log('[cjl] set CF_CLEARANCE or CJL_COOKIE in .env so the scraper can run')
+  console.log(`[cjl] catalog file ${path.join(process.cwd(), 'data', 'cjl-catalog.json')}`)
   startScraper()
 })

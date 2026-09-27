@@ -419,6 +419,33 @@ function finalizeJobs(payload, params = {}) {
   const extra = extraJobsFor(params)
   const incoming = payload.jobs || []
   const limit = pageSize(params)
+
+  // Local catalog already contains the full result set for this query.
+  // Never use the "upstream already paginated" shortcut.
+  if (payload.source === 'catalog' || payload.source === 'none') {
+    const merged = prependExtras(incoming, extra)
+    if (!limit) {
+      return {
+        ...payload,
+        jobs: merged,
+        companies: companiesFrom(merged),
+        meta: {
+          ...(payload.meta || {}),
+          totalCount: merged.length,
+          page: 1,
+          totalPages: 1,
+          limit: merged.length || JOBS_PAGE_SIZE,
+        },
+      }
+    }
+    const paged = paginateJobs(merged, params, payload.meta || {})
+    return {
+      ...payload,
+      ...paged,
+      companies: companiesFrom(merged),
+    }
+  }
+
   const upstreamCount = Number(payload.meta?.totalCount || 0)
   const upstreamPages = Number(payload.meta?.totalPages || 0)
   const upstreamPaged =
@@ -455,20 +482,24 @@ function finalizeJobs(payload, params = {}) {
 
 export async function listJobs(params = {}) {
   const catalog = readCatalog()
-  const jobs = getCatalogJobs()
+  const filtered = filterAndSortJobs(getCatalogJobs(), params)
   return finalizeJobs(
     {
-      jobs,
-      companies: companiesFrom(jobs),
+      jobs: filtered,
+      companies: companiesFrom(filtered),
       meta: {
-        totalCount: jobs.length,
-        catalogSize: jobs.length,
+        totalCount: filtered.length,
+        catalogSize: catalog.jobs.length,
         scrapedAt: catalog.scrapedAt || '',
         scrapeStatus: catalog.status || 'empty',
       },
-      source: jobs.length ? 'catalog' : 'none',
+      source: catalog.jobs.length ? 'catalog' : 'none',
     },
-    params,
+    {
+      ...params,
+      // Full catalog is local — always paginate here, never treat as upstream-paged.
+      paginate: params.paginate,
+    },
   )
 }
 

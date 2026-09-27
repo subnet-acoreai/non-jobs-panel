@@ -4,6 +4,7 @@ import path from 'node:path'
 const FILE = path.join(process.cwd(), 'data', 'cjl-catalog.json')
 
 let memory = null
+let memoryMtime = 0
 
 function emptyCatalog() {
   return {
@@ -16,8 +17,27 @@ function emptyCatalog() {
   }
 }
 
+function fileMtimeMs() {
+  try {
+    return fs.statSync(FILE).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+export function catalogPath() {
+  return FILE
+}
+
+export function invalidateCatalogCache() {
+  memory = null
+  memoryMtime = 0
+}
+
 export function readCatalog() {
-  if (memory) return memory
+  const mtime = fileMtimeMs()
+  if (memory && mtime && mtime === memoryMtime) return memory
+
   try {
     const raw = JSON.parse(fs.readFileSync(FILE, 'utf8'))
     memory = {
@@ -28,9 +48,14 @@ export function readCatalog() {
       companies: raw.companies && typeof raw.companies === 'object' ? raw.companies : {},
       meta: raw.meta || { totalCount: Array.isArray(raw.jobs) ? raw.jobs.length : 0 },
     }
+    memoryMtime = mtime
     return memory
-  } catch {
+  } catch (error) {
+    if (!memory) {
+      console.warn('[cjl] catalog read failed:', FILE, error.message)
+    }
     memory = emptyCatalog()
+    memoryMtime = mtime
     return memory
   }
 }
@@ -50,6 +75,7 @@ export function writeCatalog(next) {
   fs.mkdirSync(path.dirname(FILE), { recursive: true })
   fs.writeFileSync(FILE, JSON.stringify(catalog))
   memory = catalog
+  memoryMtime = fileMtimeMs()
   return catalog
 }
 
