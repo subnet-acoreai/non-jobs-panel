@@ -1,11 +1,13 @@
+import './env.js'
 import { stripEmptyBlocks } from '../shared/cleanHtml.js'
 
 const SITE = 'https://cryptojobslist.com'
-const DEFAULT_BUILD = process.env.CJL_NEXT_BUILD_ID || 'OL5siGC5aCOVJqUWUUDLV'
+const DEFAULT_BUILD = process.env.CJL_NEXT_BUILD_ID || '4UyKDg-aO127lMM1fuvxe'
 const CACHE_MS = 3 * 60 * 1000
 const CATALOG_CACHE_MS = 5 * 60 * 1000
 const BROWSER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+  process.env.CJL_USER_AGENT ||
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
 const SKIP_TAGS = new Set([
   'web3',
   'jobs',
@@ -20,6 +22,40 @@ const jobIndex = new Map()
 let buildId = DEFAULT_BUILD
 let buildAt = 0
 let catalogPromise = null
+let cookieWarned = false
+
+export function cjlCookie() {
+  const full = String(process.env.CJL_COOKIE || '').trim()
+  if (full) return full
+  const clearance = String(process.env.CF_CLEARANCE || process.env.CJL_CF_CLEARANCE || '').trim()
+  if (!clearance) return ''
+  return clearance.includes('=') ? clearance : `cf_clearance=${clearance}`
+}
+
+export function browserHeaders(extra = {}) {
+  const cookie = cjlCookie()
+  if (!cookie && !cookieWarned) {
+    cookieWarned = true
+    console.warn(
+      '[cjl] No CJL_COOKIE / CF_CLEARANCE in .env — Cloudflare will likely return 403. Paste cf_clearance from a browser session on cryptojobslist.com',
+    )
+  }
+  return {
+    accept: '*/*',
+    'accept-language': 'en-US,en;q=0.9',
+    'user-agent': BROWSER_UA,
+    referer: `${SITE}/`,
+    'sec-ch-ua': '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'x-nextjs-data': '1',
+    ...(cookie ? { cookie } : {}),
+    ...extra,
+  }
+}
 
 function prettyTag(slug) {
   const special = {
@@ -155,18 +191,32 @@ function extractNextData(html) {
 
 async function fetchDirect(url) {
   const res = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'x-nextjs-data': '1',
-      'User-Agent': BROWSER_UA,
-      Referer: `${SITE}/`,
-    },
-    signal: AbortSignal.timeout(8000),
+    headers: browserHeaders(),
+    signal: AbortSignal.timeout(15000),
   })
   const text = await res.text()
   if (!res.ok) throw new Error(`Next data ${res.status}`)
   if (text.trim().startsWith('<')) throw new Error('Next data HTML challenge')
   return JSON.parse(text)
+}
+
+async function fetchHtmlPage(url) {
+  const res = await fetch(url, {
+    headers: browserHeaders({
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'sec-fetch-dest': 'document',
+      'sec-fetch-mode': 'navigate',
+      'sec-fetch-site': 'none',
+      'sec-fetch-user': '?1',
+    }),
+    signal: AbortSignal.timeout(20000),
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`HTML ${res.status}`)
+  if (/just a moment|cf-browser-verification|challenge-platform/i.test(text) && !text.includes('__NEXT_DATA__')) {
+    throw new Error('Cloudflare challenge — refresh CF_CLEARANCE cookie')
+  }
+  return text
 }
 
 async function fetchViaJina(url) {
@@ -195,7 +245,7 @@ async function fetchViaTranslate(url) {
 }
 
 function isRetryable(error) {
-  return /429|timeout|aborted|fetch failed|Translate 5|Jina 429|Next data 403/i.test(error?.message || '')
+  return /429|timeout|aborted|fetch failed|Translate 5|Jina 429|Next data 5|Proxy 5/i.test(error?.message || '')
 }
 
 function sleep(ms) {
@@ -235,6 +285,18 @@ function pageUrl(params = {}) {
   return `${SITE}/${qs ? `?${qs}` : ''}`
 }
 
+async function fetchViaProxy(url) {
+  const target = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
+  const res = await fetch(target, {
+    headers: { Accept: 'application/json,text/html', 'User-Agent': BROWSER_UA },
+    signal: AbortSignal.timeout(20000),
+  })
+  if (!res.ok) throw new Error(`Proxy ${res.status}`)
+  const text = await res.text()
+  if (text.trim().startsWith('{') || text.trim().startsWith('[')) return parseMaybeJson(text)
+  return extractNextData(text)
+}
+
 async function fetchNextPayload(params = {}) {
   const html = pageUrl(params)
   const cached = cache.get(html)
@@ -242,41 +304,79 @@ async function fetchNextPayload(params = {}) {
   const id = await resolveBuildId()
   const jsonUrl = `${SITE}/_next/data/${id}/${nextRoute({ ...params, query: '' })}`
   let data
-  try {
-    data = unwrapPayload(await withRetry(() => fetchDirect(jsonUrl), 2))
-  } catch {
+  let lastError
+
+  // With Cloudflare clearance, browser-like direct fetch is the reliable path.
+  const attempts = cjlCookie()
+    ? [() => fetchDirect(jsonUrl), () => fetchHtmlThenNext(html)]
+    : [
+        () => fetchDirect(jsonUrl),
+        () => fetchViaJina(jsonUrl),
+        () => fetchViaProxy(jsonUrl),
+        () => fetchViaTranslate(html),
+        () => fetchViaProxy(html),
+        () => fetchHtmlThenNext(html),
+      ]
+
+  for (const attempt of attempts) {
     try {
-      data = unwrapPayload(await withRetry(() => fetchViaJina(jsonUrl), 2))
-    } catch {
-      data = unwrapPayload(await withRetry(() => fetchViaTranslate(html)))
+      data = unwrapPayload(await withRetry(attempt, cjlCookie() ? 3 : 2))
+      break
+    } catch (error) {
+      lastError = error
     }
   }
+  if (!data) throw lastError || new Error('Next data unavailable')
   if (data?.notFound) throw new Error('Next page not found')
+  if (data?.buildId) {
+    buildId = data.buildId
+    buildAt = Date.now()
+  }
   cache.set(html, { at: Date.now(), data })
   return data
+}
+
+async function fetchHtmlThenNext(url) {
+  const html = await fetchHtmlPage(url)
+  const payload = extractNextData(html)
+  if (payload?.buildId) {
+    buildId = payload.buildId
+    buildAt = Date.now()
+  }
+  return unwrapPayload(payload)
 }
 
 export async function resolveBuildId() {
   if (buildId && Date.now() - buildAt < 60 * 60 * 1000) return buildId
   try {
-    const data = await fetchViaTranslate(SITE)
-    if (data.buildId) {
-      buildId = data.buildId
+    const html = await fetchHtmlPage(SITE)
+    const payload = extractNextData(html)
+    if (payload?.buildId) {
+      buildId = payload.buildId
       buildAt = Date.now()
       return buildId
     }
   } catch {
     try {
-      const html = await fetchViaJina(SITE)
-      const blob = typeof html === 'string' ? html : JSON.stringify(html)
-      const match = blob.match(/\/_next\/data\/([A-Za-z0-9_-]+)\//) || blob.match(/"buildId":"([^"]+)"/)
-      if (match?.[1]) {
-        buildId = match[1]
+      const data = await fetchViaTranslate(SITE)
+      if (data.buildId) {
+        buildId = data.buildId
         buildAt = Date.now()
         return buildId
       }
     } catch {
-      // keep previous
+      try {
+        const html = await fetchViaJina(SITE)
+        const blob = typeof html === 'string' ? html : JSON.stringify(html)
+        const match = blob.match(/\/_next\/data\/([A-Za-z0-9_-]+)\//) || blob.match(/"buildId":"([^"]+)"/)
+        if (match?.[1]) {
+          buildId = match[1]
+          buildAt = Date.now()
+          return buildId
+        }
+      } catch {
+        // keep previous
+      }
     }
   }
   buildAt = Date.now()
@@ -481,19 +581,29 @@ export async function getNextCompany(slug) {
 
   const id = await resolveBuildId()
   const jsonUrl = `${SITE}/_next/data/${id}/companies/${encodeURIComponent(slug)}.json`
+  const page = `${SITE}/companies/${encodeURIComponent(slug)}`
   let payload
-  try {
-    payload = unwrapPayload(await withRetry(() => fetchDirect(jsonUrl), 2))
-  } catch {
+  let lastError
+  const attempts = cjlCookie()
+    ? [() => fetchDirect(jsonUrl), () => fetchHtmlThenNext(page)]
+    : [
+        () => fetchDirect(jsonUrl),
+        () => fetchViaJina(jsonUrl),
+        () => fetchViaTranslate(page),
+        () => fetchHtmlThenNext(page),
+      ]
+  for (const attempt of attempts) {
     try {
-      payload = unwrapPayload(await withRetry(() => fetchViaJina(jsonUrl), 2))
-    } catch {
-      payload = unwrapPayload(
-        await withRetry(() => fetchViaTranslate(`${SITE}/companies/${encodeURIComponent(slug)}`)),
-      )
+      payload = unwrapPayload(await withRetry(attempt, 2))
+      break
+    } catch (error) {
+      lastError = error
     }
   }
-  if (!payload?.company) return null
+  if (!payload?.company) {
+    if (lastError) console.warn('[cjl] company fetch failed:', lastError.message)
+    return null
+  }
 
   const jobs = (payload.jobs || []).map((job) => normalizeNextJob(job))
   const company = normalizeNextCompany(payload.company, {
@@ -525,17 +635,20 @@ export async function getNextJob(slug) {
   try {
     const id = await resolveBuildId()
     const url = `${SITE}/_next/data/${id}/jobs/${encodeURIComponent(slug)}.json`
+    const page = `${SITE}/jobs/${encodeURIComponent(slug)}`
     let payload
-    try {
-      payload = unwrapPayload(await fetchDirect(url))
-    } catch {
+    const attempts = cjlCookie()
+      ? [() => fetchDirect(url), () => fetchHtmlThenNext(page)]
+      : [() => fetchDirect(url), () => fetchViaJina(url), () => fetchViaTranslate(page), () => fetchHtmlThenNext(page)]
+    for (const attempt of attempts) {
       try {
-        payload = unwrapPayload(await fetchViaJina(url))
+        payload = unwrapPayload(await withRetry(attempt, 2))
+        break
       } catch {
-        payload = unwrapPayload(await fetchViaTranslate(`${SITE}/jobs/${encodeURIComponent(slug)}`))
+        // try next
       }
     }
-    const raw = payload.firstJob?.job || payload.job
+    const raw = payload?.firstJob?.job || payload?.job
     if (!raw) return jobIndex.get(slug) || null
     return normalizeNextJob(raw, { html: raw.jobDescription, slug: raw.seoSlug || slug })
   } catch {

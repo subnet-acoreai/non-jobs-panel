@@ -10,14 +10,17 @@ import {
   createSession,
   getSession,
   loginUser,
+  requireAdmin,
   requireUser,
   signupUser,
 } from './auth.js'
 import { getCompany, getJob, listCompanies, listJobs } from './cjlApi.js'
-import { listAllNextJobs } from './cjlNext.js'
 import { extraJobsRouter } from './extraJobs.js'
 import { telegramConfigured } from './telegram.js'
 import { visitsRouter } from './visits.js'
+import { getScraperState, runScrapeCycle, startScraper } from './scraper.js'
+import { catalogStatus } from './catalogStore.js'
+import { cjlCookie } from './cjlNext.js'
 import { events, layoffs, posts, researchReports, talent, talentMeta } from './cjlPublic.js'
 import { estimateSalary, getHiringTrends, getSalaryReport } from './insights.js'
 
@@ -151,6 +154,19 @@ app.get('/api/companies/:slug', async (req, res) => {
 app.use('/api/visits', visitsRouter)
 app.use('/api/applications', applicationsRouter)
 app.use('/api/admin/jobs', extraJobsRouter)
+
+app.get('/api/scrape/status', (_req, res) => {
+  res.json(getScraperState())
+})
+
+app.post('/api/admin/scrape', requireAdmin, async (_req, res) => {
+  try {
+    const state = await runScrapeCycle('admin')
+    res.json(state)
+  } catch (error) {
+    res.status(500).json({ message: error.message || 'Scrape failed' })
+  }
+})
 
 const LISTINGS_FILE = path.join(process.cwd(), 'data', 'listings.json')
 
@@ -288,7 +304,12 @@ app.listen(PORT, () => {
   console.log(`[server] listening on http://127.0.0.1:${PORT}`)
   if (telegramConfigured()) console.log('[telegram] visit alerts enabled')
   else console.log('[telegram] visit alerts off — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env')
-  listAllNextJobs().catch((error) => {
-    console.warn('[cjl] catalog warm failed:', error.message)
-  })
+  const status = catalogStatus()
+  console.log(
+    `[cjl] catalog ${status.status || 'empty'} — ${status.jobCount} jobs` +
+      (status.scrapedAt ? ` (scraped ${status.scrapedAt})` : ''),
+  )
+  if (cjlCookie()) console.log('[cjl] Cloudflare cookie loaded')
+  else console.log('[cjl] set CF_CLEARANCE or CJL_COOKIE in .env so the scraper can run')
+  startScraper()
 })

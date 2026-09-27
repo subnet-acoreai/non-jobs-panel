@@ -8,7 +8,7 @@ export default function Footer() {
       <div className="mx-auto grid max-w-[1200px] gap-8 px-4 py-10 sm:grid-cols-2 sm:gap-10 sm:px-5 sm:py-14 lg:grid-cols-4">
         <div>
           <Link to="/" className="inline-flex items-center rounded-xl bg-black/40 p-1.5 ring-1 ring-white/10">
-            <Logo className="h-24 w-auto max-w-[360px] rounded-lg" alt={BRAND_NAME} />
+            <Logo className="h-14 w-auto max-w-[220px] rounded-lg" alt={BRAND_NAME} />
           </Link>
           <p className="mt-3 max-w-xs text-sm leading-6 text-white/65">
             Live Web3, crypto, and blockchain jobs. Apply in one flow. Hire with crypto.

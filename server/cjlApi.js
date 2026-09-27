@@ -1,8 +1,9 @@
+import { getCatalogCompany, getCatalogJob, getCatalogJobs, readCatalog } from './catalogStore.js'
+import { getPublishedExtraBySlug, listPublishedExtraJobs } from './extraJobs.js'
+import { filterAndSortJobs } from '../shared/jobSearch.js'
 import { XMLParser } from 'fast-xml-parser'
 import { stripEmptyBlocks } from '../shared/cleanHtml.js'
-import { filterAndSortJobs } from '../shared/jobSearch.js'
-import { getNextCompany, getNextJob, listAllNextJobs, listNextJobs } from './cjlNext.js'
-import { getPublishedExtraBySlug, listPublishedExtraJobs } from './extraJobs.js'
+import { browserHeaders, cjlCookie } from './cjlNext.js'
 
 const API_BASE = 'https://api.cryptojobslist.com'
 const CACHE_MS = 5 * 60 * 1000
@@ -263,7 +264,12 @@ async function fetchRss(feed) {
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.jobs
 
   const res = await fetch(`${API_BASE}/rss/${feed}.xml`, {
-    headers: { Accept: 'application/rss+xml, application/xml, text/xml' },
+    headers: {
+      accept: 'application/rss+xml, application/xml, text/xml,*/*',
+      'accept-language': 'en-US,en;q=0.9',
+      'user-agent': browserHeaders()['user-agent'],
+      ...(cjlCookie() ? { cookie: cjlCookie() } : {}),
+    },
   })
   if (!res.ok) throw new Error(`RSS ${feed} returned ${res.status}`)
   const xml = await res.text()
@@ -447,106 +453,41 @@ function finalizeJobs(payload, params = {}) {
   }
 }
 
-async function listLivePage(params = {}) {
-  const limit = pageSize(params)
-  const page = Math.max(1, Number(params.page || 1))
-  const extra = extraJobsFor(params)
-  if (!limit || limit === UPSTREAM_PAGE_SIZE) {
-    return listNextJobs(params)
-  }
-
-  const needFromLive = page <= 1 ? Math.max(0, limit - extra.length) : limit
-  const liveOffset = page <= 1 ? 0 : (page - 1) * limit - extra.length
-  const startPage = Math.floor(Math.max(0, liveOffset) / UPSTREAM_PAGE_SIZE) + 1
-  const endPage = Math.floor(Math.max(0, liveOffset + needFromLive - 1) / UPSTREAM_PAGE_SIZE) + 1
-  const payloads = []
-  for (let nextPage = startPage; nextPage <= endPage; nextPage += 1) {
-    payloads.push(await listNextJobs({ ...params, page: nextPage }))
-  }
-  const liveJobs = payloads.flatMap((payload) => payload.jobs || [])
-  const start = liveOffset - (startPage - 1) * UPSTREAM_PAGE_SIZE
-  const slice = liveJobs.slice(Math.max(0, start), Math.max(0, start) + needFromLive)
-  const jobs = (page <= 1 ? prependExtras(slice, extra) : slice).slice(0, limit)
-  const first = payloads[0] || { meta: {} }
-  const totalCount = Number(first.meta?.totalCount || liveJobs.length) + extra.length
-  return {
-    ...first,
-    jobs,
-    companies: companiesFrom(jobs),
-    meta: {
-      ...(first.meta || {}),
-      totalCount,
-      page,
-      totalPages: Math.max(1, Math.ceil(totalCount / limit)),
-      limit,
-    },
-  }
-}
-
 export async function listJobs(params = {}) {
-  try {
-    const query = String(params.query || '').trim()
-    const wantsAll = params.paginate === false || Boolean(query)
-    const payload = wantsAll ? await listAllNextJobs(params) : await listLivePage(params)
-    const jobs = wantsAll ? filterAndSortJobs(payload.jobs, params) : payload.jobs
-    return finalizeJobs(
-      {
-        ...payload,
-        jobs,
-        companies: companiesFrom(jobs),
-        meta: wantsAll ? { ...(payload.meta || {}), totalCount: jobs.length } : payload.meta,
+  const catalog = readCatalog()
+  const jobs = getCatalogJobs()
+  return finalizeJobs(
+    {
+      jobs,
+      companies: companiesFrom(jobs),
+      meta: {
+        totalCount: jobs.length,
+        catalogSize: jobs.length,
+        scrapedAt: catalog.scrapedAt || '',
+        scrapeStatus: catalog.status || 'empty',
       },
-      params,
-    )
-  } catch (error) {
-    console.warn('[cjl] Next data API unavailable:', error.message)
-  }
-
-  try {
-    const json = await fetchJsonJobs(params)
-    if (json) {
-      const jobs = filterAndSortJobs(json.jobs, params)
-      return finalizeJobs({
-        ...json,
-        jobs,
-        companies: companiesFrom(jobs),
-        meta: { ...(json.meta || {}), totalCount: jobs.length },
-      }, params)
-    }
-  } catch (error) {
-    console.warn('[cjl] JSON API unavailable, using public RSS:', error.message)
-  }
-
-  const catalog = await fetchAllRss()
-  const jobs = filterAndSortJobs(catalog, params)
-  return finalizeJobs({
-    jobs,
-    companies: companiesFrom(catalog),
-    meta: { totalCount: jobs.length, catalogSize: catalog.length },
-    source: 'rss',
-    feed: 'merged',
-  }, params)
+      source: jobs.length ? 'catalog' : 'none',
+    },
+    params,
+  )
 }
 
 export async function getJob(slug) {
   const extra = getPublishedExtraBySlug(slug)
   if (extra) return extra
-  try {
-    const job = await getNextJob(slug)
-    if (job) return job
-  } catch (error) {
-    console.warn('[cjl] Next job lookup failed:', error.message)
-  }
-  if (jobIndex.has(slug)) return jobIndex.get(slug)
-  await fetchRss(FEEDS.all)
-  if (jobIndex.has(slug)) return jobIndex.get(slug)
-  await fetchRss('remote')
-  return jobIndex.get(slug) || null
+  return getCatalogJob(slug) || null
 }
 
 export async function listCompanies() {
-  const { jobs, companies, source } = await listJobs({ paginate: false })
-  return { companies, totalJobs: jobs.length, source }
+  const jobs = getCatalogJobs()
+  const catalog = readCatalog()
+  const fromJobs = companiesFrom(jobs)
+  const enriched = fromJobs.map((company) => ({
+    ...(catalog.companies?.[company.slug] || {}),
+    ...company,
+    open: company.open,
+  }))
+  return { companies: enriched, totalJobs: jobs.length, source: 'catalog' }
 }
 
 function jobMatchesCompany(job, slug, name) {
@@ -560,36 +501,26 @@ export async function getCompany(slug) {
   const key = String(slug || '').trim()
   if (!key) return null
 
-  let live = null
-  try {
-    live = await getNextCompany(key)
-  } catch (error) {
-    console.warn('[cjl] company lookup failed:', error.message)
-  }
-
-  const extras = listPublishedExtraJobs().filter((job) => jobMatchesCompany(job, key, live?.company?.name))
-  let catalogJobs = []
-  if (!live?.company) {
-    const { jobs } = await listJobs({ paginate: false })
-    catalogJobs = jobs.filter((job) => jobMatchesCompany(job, key, live?.company?.name))
-  }
+  const stored = getCatalogCompany(key)
+  const extras = listPublishedExtraJobs().filter((job) => jobMatchesCompany(job, key, stored?.name))
+  const catalogJobs = getCatalogJobs().filter((job) => jobMatchesCompany(job, key, stored?.name))
 
   const merged = []
   const seen = new Set()
-  for (const job of [...extras, ...(live?.jobs || []), ...catalogJobs]) {
+  for (const job of [...extras, ...catalogJobs]) {
     if (!job.slug || seen.has(job.slug)) continue
     seen.add(job.slug)
     merged.push(job)
   }
 
   const fallback = companiesFrom(merged)[0]
-  const company = live?.company || fallback
+  const company = stored || fallback
   if (!company) return null
   return {
     company: { ...company, open: merged.length, logo: company.logo || fallback?.logo || '' },
     jobs: merged,
-    related: live?.related || [],
-    source: live ? 'next' : 'jobs',
+    related: [],
+    source: 'catalog',
   }
 }
 
