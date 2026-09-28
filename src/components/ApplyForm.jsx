@@ -140,7 +140,7 @@ export default function ApplyForm({ job }) {
     data.set('whyCompany', answers[0]?.answer || '')
     data.set('whyFit', answers[1]?.answer || '')
     data.set('aiTools', answers[2]?.answer || '')
-    data.set('coverLetter', form.coverLetter.value.trim())
+    data.set('coverLetter', '')
     data.set('github', form.github.value.trim())
     data.set('linkedin', form.linkedin.value.trim())
     data.set('telegram', form.telegram.value.trim())
@@ -268,9 +268,6 @@ export default function ApplyForm({ job }) {
             />
           </Field>
         ))}
-        <Field label="Why are you a great fit for this job? (Cover Letter)" required>
-          <textarea name="coverLetter" required rows={8} placeholder="Write your answer here" className={`${underline} min-h-[160px] resize-y`} />
-        </Field>
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">

@@ -70,10 +70,8 @@ function toForm(job) {
 }
 
 function questionsForForm(job) {
-  const stored = Array.isArray(job.questions)
-    ? job.questions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
-    : []
-  return stored.length ? stored : defaultQuestions(job.company)
+  if (!Array.isArray(job.questions)) return defaultQuestions(job.company)
+  return job.questions.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
 }
 
 export default function AdminJobEdit() {
@@ -196,7 +194,7 @@ export default function AdminJobEdit() {
         <div>
           <span className={label}>Apply questions</span>
           <p className="mb-2 text-[12px] text-gray-400">
-            These replace the default screening questions for this job. Cover letter is always asked.
+            Applicants see only these questions.
           </p>
           <div className="space-y-2">
             {form.questions.map((question, index) => (
@@ -214,8 +212,10 @@ export default function AdminJobEdit() {
                 <button
                   type="button"
                   onClick={() => {
-                    const next = form.questions.filter((_, item) => item !== index)
-                    set('questions', next.length ? next : [''])
+                    set(
+                      'questions',
+                      form.questions.filter((_, item) => item !== index),
+                    )
                   }}
                   className="mt-1 shrink-0 rounded-md px-2 py-1 text-sm text-gray-400 hover:text-red-500"
                 >

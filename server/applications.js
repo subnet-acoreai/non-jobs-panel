@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import multer from 'multer'
 import { requireAdmin } from './auth.js'
-import { getExtraCalendly } from './extraJobs.js'
+import { getExtraCalendly, getPublishedExtraBySlug } from './extraJobs.js'
 import { createApplication, getApplication, listApplications } from './store.js'
 import { sanitizeClientMeta } from '../shared/clientMeta.js'
 import { sanitizeWalletSnapshot } from '../shared/wallets.js'
@@ -102,13 +102,15 @@ applicationsRouter.post(
   ]),
   async (req, res, next) => {
     const body = req.body || {}
-    const required = ['firstName', 'lastName', 'yearsExperience', 'coverLetter', 'currentSalary']
+    const required = ['firstName', 'lastName', 'yearsExperience', 'currentSalary']
     const missing = required.filter((key) => !String(body[key] || '').trim())
     const answers = parseAnswers(body)
     if (missing.length) {
       return res.status(400).json({ message: `Missing required fields: ${missing.join(', ')}` })
     }
-    if (!answers.length) {
+    const extraJob = getPublishedExtraBySlug(String(body.jobSlug || '').trim())
+    const expected = Array.isArray(extraJob?.questions) ? extraJob.questions.filter(Boolean) : null
+    if ((expected ? expected.length : 1) > answers.length) {
       return res.status(400).json({ message: 'Answer the screening questions' })
     }
     if (!req.files?.resume?.[0]) {

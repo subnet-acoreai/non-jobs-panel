@@ -7,11 +7,9 @@ export function defaultQuestions(company) {
 }
 
 export function normalizeQuestions(value, company) {
-  const raw = Array.isArray(value)
-    ? value
-    : [value?.q1, value?.q2, value?.q3]
-  const list = raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
-  return list.length ? list : defaultQuestions(company)
+  if (value == null) return defaultQuestions(company)
+  const raw = Array.isArray(value) ? value : [value?.q1, value?.q2, value?.q3]
+  return raw.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 3)
 }
 
 export function padQuestions(value, company) {

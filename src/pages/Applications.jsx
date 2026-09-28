@@ -153,7 +153,9 @@ export default function Applications() {
             ).map((item) => (
               <Answer key={item.question} question={item.question} answer={item.answer} />
             ))}
-            <Answer question="Why are you a great fit for this job? (Cover Letter)" answer={app.coverLetter} />
+            {app.coverLetter ? (
+              <Answer question="Why are you a great fit for this job? (Cover Letter)" answer={app.coverLetter} />
+            ) : null}
             {app.github || app.linkedin || app.telegram ? (
               <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
                 {app.github ? (
