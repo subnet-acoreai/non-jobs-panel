@@ -3,7 +3,10 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 const AppContext = createContext(null)
 
 export function AppProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('cjl-theme') || 'system')
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem('cjl-theme')
+    return stored === 'light' || stored === 'dark' ? stored : 'dark'
+  })
   const [bookmarks, setBookmarks] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('cjl-bookmarks') || '[]')

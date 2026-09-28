@@ -1,7 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      try {
+        var stored = localStorage.getItem('cjl-theme')
+        var theme = stored === 'light' || stored === 'dark' ? stored : 'dark'
+        document.documentElement.classList.toggle('dark', theme === 'dark')
+      } catch (e) {}
+    </script>
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta
